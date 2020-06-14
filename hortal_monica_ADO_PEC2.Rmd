@@ -1,0 +1,531 @@
+---
+title: "PEC 2 Análisis de Datos Ómicos"
+author: "Mónica Hortal Foronda"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  word_document:
+    toc: yes
+    toc_depth: '3'
+  html_document:
+    theme: united
+    toc: yes
+    toc_depth: 3
+header-includes:
+- \usepackage{leading}
+- \leading{15pt}
+editor_options:
+  chunk_output_type: inline
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Repositorio GitHub: https://github.com/monicahortal/PEC-2-An-lisis-de-Datos-micos.git
+
+# 1. Abstract
+
+En este trabajo analizaremos los datos obtenidos en un estudio de RNA-seq sobre muestras de tejido de tiroides en las que se han comparado tres tipos de infiltración: *not filtered tissues* (NIT), *small focal infiltrates* (SFI) y *extensive lymphoid infiltrates* (ELI). Para realizar este análisis, utilizamos el paquete Bioconductor dentro del programa R. A partir del análisis realizado, podemos observr que el grupo ELI es el que presenta unas mayores diferencias en la expresión génica de los genes analizados con respecto a los grupos NIT y SFI, que son similares entre sí. 
+
+# 2. Objetivos
+
+Los objetivos de este trabajo son elaborar y ejecutar un pipeline para analizar los datos de RNA-seq que se nos han proporcionado con el fin de detectar diferencias significativas en la expresión de genes entre los tres tipos de infiltración que se han realizado. Una vez obtenidos los resultados, debemos elaborar un informe técnico con la estructura tradicional para mostrar los resultados. 
+  
+# 3. Materiales y métodos
+
+## 3.1. Naturaleza de los datos, tipo de experimento y diseño experimental
+
+Para analizar las diferencias de expresión génica con los distintos tipos de infiltración se nos han proporcionado dos ficheros csv: *targets*, que contiene la información sobre las muestras y *counts*, que contiene los resultados de los contajes obtenidos tras la secuenciación mediante RNA-seq. Estos datos proceden de muestras de un estudio obtenido del repositorio GTEx. 
+
+## 3.2. Software
+
+Para realizar el análisis debemos instalar el programa R statistical software que podemos descargar desde la página de R Project (https://www.r-project.org/).Para facilitar su uso podemos descargar la interfaz RStudio desde su página web (https://www.rstudio.com/).
+
+A la hora de realizar este análisis necesitaremos funciones que no están disponibles en la instalación básica de R, por lo que he instalado algunas librerías. Los paquetes estándar se descargan desde el repositorio CRAN con la función install.packages, mientras los paquetes de Bioconductor se descargan con la función install() del paquete BiocManager.
+
+## 3.3. Procedimiento general de análisis
+
+El orden que vamos a seguir para realizar el análisis es el siguiente:
+
+  Selección y preparación de los datos
+  Preprocesado de los datos: filtraje y normalización
+  Identificación de genes diferencialmente expresados
+  Anotación de los resultados 
+  Comparación entre distintas comparaciones
+  Análisis de significación biológica de los resultados obtenidos
+
+### 3.3.1. Selección y preparación de los datos
+
+De las 292 muestras analizadas, debemos seleccionar 30 (10 de cada grupo) para realizar el análisis. Para ello, he optado por hacer esta selección de forma manual en Excel, ya que conocemos que los *Sample_Name* del archivo *targets* se corresponden con las columnas del archivo *counts*. En primer lugar, en *targets* he seleccionado las 10 primeras muestras de los grupos SFI y ELI y las primeras 10 muestras impares del grupo NIT, que es el más numeroso, y he eliminado el resto de muestras. Después, en *counts*, he seleccionado las columnas que tenían el mismo nombre que las filas seleccionadas en *targets* y he eliminado el resto.
+
+Posteriormente, eliminamos el punto y el número que va detrás de él en la primera columna del archivo *counts* para evitar problemas durante el análisis. Para ello, utilizamos la herramienta Buscar y Reemplazar de Excel. 
+
+Una vez que estos archivos están listos para ser leídos, preparamos el entorno y los leemos.
+
+```{r}
+setwd("C:/Users/monic/Desktop/PEC2 ADO")
+counts <- read.csv(file="counts.csv",sep=";",row.names = 1)
+targets <- read.csv(file="targets.csv",sep=",")
+```
+
+Para preparar el *data object* que vamos a utilizar en el análisis, necesitamos una tabla con los counts de los fragmentos, que en nuestro caso va a ser *counts* y una tabla con información sobre las muestras, que es *targets*.
+
+Para construir el objeto DESeqDataSet, hacemos lo siguiente:
+
+```{r message=FALSE}
+library("DESeq2")
+ddsMat <- DESeqDataSetFromMatrix(countData = counts,
+                                  colData = targets,
+                                  design = ~ Group)
+```
+
+Una vez que hemos creado el objeto DESeqDataSet, preprocesamos los datos del estudio.
+
+### 3.3.2. Preprocesado de los datos: filtraje y normalización
+
+Para realizar el análisis, en primer lugar haremos transformaciones de los conteos para explorar visualmente las relaciones existentes. Nuestra matriz *counts* contiene muchas filas con solo ceros. Para reducir el tamaño del objeto y aumentar la velocidad de ejecución de las funciones, podemos eliminar las filas que no tienen o casi no tienen información sobre la cantidad de expresión génica. Para ello, eliminamos los registros que no tienen recuentos o solo un recuento único en todas las muestras. 
+
+```{r}
+nrow(ddsMat)
+dds <- ddsMat[ rowSums(counts(ddsMat)) > 1, ]
+nrow(dds)
+```
+
+Al eliminar estos registros, pasamos de 56202 a 43191.
+
+En general, los métodos estadísticos para el análisis de datos multidimensionales funcionan mejor con datos que tienen el mismo rango de varianza en diferentes rangos de los valores medios. Sin embargo, para los recuentos de RNA-seq, la varianza esperada crece con la media. Con el paquete DESeq2 tenemos dos transformaciones posibles para los datos de conteo que estabilizan la varianza a través de la media: el VST y el rlog. El VST es mucho más rápido de calcular y es menos sensible a los valores atípicos de conteo alto que el rlog. 
+
+```{r}
+vsd <- vst(dds, blind = FALSE)
+head(assay(vsd), 3)
+colData(vsd)
+```
+
+Especificamos blind = FALSE para que las diferencias causadas por las variables en el diseño no contribuyan a la tendencia esperada de varianza media del experimento. 
+
+```{r}
+rld <- rlog(dds, blind = FALSE)
+head(assay(rld), 3)
+```
+
+Para ver el efecto de la transformación, hacemos una gráfica comparando la primera muestra frente a la segunda, primero simplemente usando la función log2 (después de agregar 1, para evitar tomar el registro de cero), y los valores transformados con VST y rlog.
+
+En el caso de log2, en primer lugar debemos estimar los factores de tamaño para tener en cuenta la profundidad de secuenciación y luego especificar normalized=TRUE. La corrección de la profundidad de secuencia se realiza automáticamente para vst y rlog.
+
+```{r fig.align='center', fig.height=6, fig.width=7, message=FALSE}
+library("dplyr")
+library("ggplot2")
+
+dds <- estimateSizeFactors(dds)
+
+df <- bind_rows(
+  as_data_frame(log2(counts(dds, normalized=TRUE)[, 1:2]+1)) %>%
+         mutate(transformation = "log2(x + 1)"),
+  as_data_frame(assay(vsd)[, 1:2]) %>% mutate(transformation = "vst"),
+  as_data_frame(assay(rld)[, 1:2]) %>% mutate(transformation = "rlog"))
+  
+colnames(df)[1:2] <- c("x", "y")  
+
+ggplot(df, aes(x = x, y = y)) + geom_hex(bins = 80) +
+  coord_fixed() + facet_grid( . ~ transformation)  
+```
+
+*Gráfico 1. Diagramas de dispersión utilizando la transformación log2 de recuentos normalizados (izquierda), rlog (centro) y VST (derecha). Mientras que los counts del rlog está aproximadamente en la misma escala que el log2, el VST tiene un desplazamiento hacia arriba para los valores más pequeños. Podemos ver cómo los genes con recuentos bajos (esquina inferior izquierda) parecen ser excesivamente variables en la escala logarítmica ordinaria, mientras que VST y rlog comprimen las diferencias para los genes de recuento bajo para los cuales los datos proporcionan poca información sobre la expresión diferencial.*
+
+Un paso útil en un análisis de RNA-seq suele ser evaluar la similitud general entre muestras, es decir, qué muestras son similares entre sí, cuáles son diferentes y si esto se ajusta las expectativas del diseño del experimento.
+
+```{r}
+sampleDists <- dist(t(assay(vsd)))
+sampleDists
+```
+
+Para visualizar estas distancias, creamos un mapa de calor con la función pheatmap. Para trazar la matriz de distancia entre muestras con las filas y columnas ordenadas por las distancias en nuestra matriz de distancia, proporcionamos manualmente SampleDists al argumento clustering_distance de la función pheatmap. 
+
+```{r message=FALSE, fig.align='center', fig.width=6, fig.height=4}
+library("pheatmap")
+library("RColorBrewer")
+
+sampleDistMatrix <- as.matrix( sampleDists )
+rownames(sampleDistMatrix) <- paste( vsd$dex, vsd$cell, sep = " - " )
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+```
+
+*Gráfico 2. Mapa de calor de distancias entre muestras utilizando los valores transformados por rlog.*
+
+A continuación, realizamos un análisis de las componentes principales. 
+
+```{r fig.align='center', fig.width=5, fig.height=5}
+plotPCA(vsd, intgroup = c("Group"))
+```
+
+*Gráfico 3. Análisis de componentes principales. Las 10 muestras de cada grupo están representadas del mismo color. Observamos que las muestras del grupo ELI se agrupan mayoritariamente a la derecha del gráfico mientras las de los grupos NIT y SFI se sitúan a la izquierda. La primera componente principal tiene una influencia muy superior a la segunda (60% vs 11% de la variación).*
+
+Para completar el análisis exploratorio, realizamos un gráfico de MDS.
+
+```{r fig.align='center', fig.width=5, fig.height=5}
+mds <- as.data.frame(colData(vsd))  %>%
+         cbind(cmdscale(sampleDistMatrix))
+ggplot(mds, aes(x = `1`, y = `2`, color = Group, shape = sex)) +
+  geom_point(size = 3) + coord_fixed()
+```
+
+*Gráfico 4. MDS. Las muestras de cada grupo se representan de un color y, también, se representan con distinta forma aquellas que corresponden a hombres (triángulo) y mujeres (círculo).*
+
+
+
+
+
+### 3.3.3. Identificación de genes diferencialmente expresados
+
+Para identificar los genes diferencialmente expresados, utilizaremos el objeto DESeqDataSet creado previamente y lo llamaremos con la función DESeq.
+
+```{r}
+dds <- DESeq(dds, parallel =TRUE)
+```
+
+En el DESeqDataSet que nos devuelve tenemos todos los parámetros ajustados y podemos extraer aquellos que necesitemos para cada análisis. En este experimento contamos con 3 grupos de muestras: *not infiltrated tissues* (NIT), *small focal inflitrates* (SFI) y *extensive lymphoid infiltrates* (ELI). Por ello, realizaremos 3 comparaciones: NIT-SFI, NIT-ELI y SFI-ELI. 
+
+#### Comparación NIT-SFI.
+
+A continuación, extraemos los resultados que necesitamos para hacer una comparación, indicando que compare las muestras con NIT y SFI en la variable Group.
+
+```{r}
+res <- results(dds, contrast=c("Group","NIT","SFI"))
+res
+```
+
+Al ser un objeto DataFrame, lleva metadatos con información sobre el significado de las columnas:
+
+```{r}
+mcols(res, use.names = TRUE)
+```
+
+Dónde:
+
+   *baseMean* es el promedio de los *counts* normalizados, dividido entre el tamaño, tomados sobre todas las muestras en el DESeqDataSet.
+   *log2FoldChange* es la estimación del tamaño del efecto. Nos dice cuánto parece haber cambiado la expresión del gen entre los dos grupos analizados.
+   *lfcSE* es la estimación de error estándar.
+   *padj* son los p-valor ajustados por el método de Benjamini-Hochbergtal.
+
+También podemos resumir los resultados con la siguiente línea de código:
+
+```{r}
+summary(res)
+```
+
+En este punto, podemos ser más o menos estrictos para determinar los genes cuyas diferencias en la expresión son estadísticamente significativas. En este primer cálculo, ponemos el umbral más bajo:
+
+```{r}
+res.05 <- results(dds, alpha = 0.05)
+table(res.05$padj < 0.05)
+```
+
+Ahora, elevamos el umbral:
+
+```{r}
+resLFC1 <- results(dds, lfcThreshold=1)
+table(resLFC1$padj < 0.1)
+```
+
+Vemos que el número de genes diferencialmente expresados en los dos grupos desciende de 3634 a 716 al ser más estrictos con el umbral. 
+
+Por lo tanto, si consideramos que una tasa del 10% de falsos positivos es aceptable, podemos considerar todos los genes con un p-valor ajustado por debajo del 10% = 0.1 como expresados diferencialmente de forma significativa.
+
+Para calcular cuántos genes cumplen este criterio, hacemos lo siguiente:
+
+```{r}
+sum(res$padj < 0.1, na.rm=TRUE)
+```
+
+A continuación, hacemos subconjuntos con la función subset y clasificamos los genes. Con ello, obtenemos los genes infraexpresados (*down-regulated*) con una expresión diferencial más fuerte estadísticamente. 
+
+```{r}
+resSig <- subset(res, padj < 0.1)
+head(resSig[ order(resSig$log2FoldChange), ])
+```
+
+…y los genes con una sobreexpresión más fuerte (*up-regulated*):
+
+```{r}
+head(resSig[ order(resSig$log2FoldChange, decreasing = TRUE), ])
+```
+
+A continuación, realizamos las dos comparaciones restantes entre grupos. Se muestran únicamente los comandos, ya que las explicaciones serían las mismas que en la comparación ya explicada. 
+
+#### Comparación NIT-ELI.
+
+```{r}
+res1 <- results(dds, contrast=c("Group","NIT","ELI"))
+res1
+```
+
+```{r}
+mcols(res1, use.names = TRUE)
+```
+
+```{r}
+summary(res1)
+```
+
+```{r}
+res1.05 <- results(dds, alpha = 0.05)
+table(res1.05$padj < 0.05)
+```
+
+```{r}
+resLFC1.1 <- results(dds, lfcThreshold=1)
+table(resLFC1.1$padj < 0.1)
+```
+
+```{r}
+sum(res1.05$padj < 0.1, na.rm=TRUE)
+```
+
+Genes *down-regulated*:
+
+```{r}
+resSig <- subset(res1, padj < 0.1)
+head(resSig[ order(resSig$log2FoldChange), ])
+```
+
+Genes *up-regulated*:
+
+```{r}
+head(resSig[ order(resSig$log2FoldChange, decreasing = TRUE), ])
+```
+
+#### Comparación SFI-ELI.
+
+```{r}
+res2 <- results(dds, contrast=c("Group","SFI","ELI"))
+res2
+```
+
+```{r}
+mcols(res2, use.names = TRUE)
+```
+
+```{r}
+summary(res2)
+```
+
+```{r}
+res2.05 <- results(dds, alpha = 0.05)
+table(res2.05$padj < 0.05)
+```
+
+```{r}
+resLFC1.2 <- results(dds, lfcThreshold=1)
+table(resLFC1.2$padj < 0.1)
+```
+
+```{r}
+sum(res2.05$padj < 0.1, na.rm=TRUE)
+```
+
+Genes *down-regulated*:
+
+```{r}
+resSig <- subset(res2, padj < 0.1)
+head(resSig[ order(resSig$log2FoldChange), ])
+```
+
+Genes *up-regulated*:
+
+```{r}
+head(resSig[ order(resSig$log2FoldChange, decreasing = TRUE), ])
+```
+
+### 3.3.4. Anotación de los resultados 
+
+Nuestra tabla de resultados hasta ahora solo contiene las ID de los genes de Ensembl, pero otros nombres alternativos son más útiles a la hora de realizar la interpretación. Los paquetes de anotación de Bioconductor ayudan a mapear varios esquemas de identificación entre sí:
+
+```{r message= FALSE}
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+columns(org.Hs.eg.db)
+```
+
+Podemos utilizar la función mapIds para añadir columnas a nuestra tabla de resultados. Proporcionamos los nombres de fila de nuestra tabla de resultados como una clave y especificamos que keytype = ENSEMBL. El argumento de la columna le dice a la función mapIds qué información queremos, y el argumento multiVals le dice a la función qué hacer si hay múltiples valores posibles para un solo valor de entrada. Aquí le pedimos que nos devuelva el primero que encuentre en la base de datos. Para agregar el símbolo del gen y la identificación de Entrez, llamamos a mapIds dos veces.
+
+```{r}
+res$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+res$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+resOrdered <- res[order(res$pvalue),]
+head(resOrdered)
+```
+
+Repetimos el proceso en las otras dos comparaciones:
+
+```{r}
+res1$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res1),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+res1$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res1),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res1Ordered <- res1[order(res1$pvalue),]
+head(res1Ordered)
+```
+
+```{r}
+res2$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res2),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+res2$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res2),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res2Ordered <- res2[order(res$pvalue),]
+head(res2Ordered)
+```
+
+A continuación, guardamos los resultados obtenidos en archivos csv, que se crean en el *working directory*.
+
+```{r}
+resOrdered_NIT_SFI <- as.data.frame(resOrdered)
+write.csv(resOrdered, file = "results_NIT_SFI.csv")
+
+resOrdered_NIT_ELI <- as.data.frame(res1Ordered)
+write.csv(res1Ordered, file = "results_NIT_ELI.csv")
+
+resOrdered_SFI_ELI <- as.data.frame(res2Ordered)
+write.csv(res2Ordered, file = "results_SFI_ELI.csv")
+```
+
+Aunque en las visualizaciones de las primeras posiciones de la tabla no observemos ningún símbolo de los genes ni ningún código *entrez*, al abrir los archivos csv exportados sí podemos observar que estos datos están completos en algunos registros. 
+
+### 3.3.5. Eliminación de efectos de los lotes
+
+Podemos usar métodos estadísticos diseñados para detectar efectos de los lotes en RNA-seq con el paquete sva o RUVSeq y después agregarlos al diseño del DESeqDataSet. Primero usamos SVA para encontrar efectos de lote ocultos y luego RUV.
+
+A continuación, obtenemos una matriz de recuentos normalizados para los cuales el recuento promedio en las muestras es mayor que 1. En este apartado, tratamos de detectar cualquier efecto oculto por lotes, suponiendo que no tenemos información previa sobre los grupos. Por lo tanto, utilizamos una matriz de modelo completo con la variable *Group*, y una matriz de modelo reducida o nula con solo un término de intercepción. 
+
+```{r message=FALSE}
+library("sva")
+
+dat  <- counts(dds, normalized = TRUE)
+idx  <- rowMeans(dat) > 1
+dat  <- dat[idx, ]
+mod  <- model.matrix(~ Group, colData(dds))
+mod0 <- model.matrix(~   1, colData(dds))
+svseq <- svaseq(dat, mod, mod0, n.sv = 2)
+
+svseq$sv
+```
+
+Como realmente sí conocemos los grupos, podemos comprobar si el método SVA logró recuperar estas variables.
+
+```{r fig.align='center', fig.width=7, fig.height=7}
+par(mfrow = c(2, 1), mar = c(3,5,3,1))
+for (i in 1:2) {
+  stripchart(svseq$sv[, i] ~ dds$Group, vertical = TRUE, main = paste0("SV", i))
+  abline(h = 0)
+ }
+```
+
+*Gráficos 5 y 6. Análisis del efecto de los lotes con SVA.*
+
+Aquí, conocemos la fuente oculta de variación, que son los distintos grupos, y podemos ver que el procedimiento SVA ha identificado una fuente de variación que se correlaciona con ellos.
+
+Finalmente, para usar SVA para eliminar cualquier efecto sobre los recuentos de nuestras variables sustitutas, simplemente añadimos estas dos variables como columnas al DESeqDataSet y luego las agregamos al diseño:
+
+```{r}
+ddssva <- dds
+ddssva$SV1 <- svseq$sv[,1]
+ddssva$SV2 <- svseq$sv[,2]
+design(ddssva) <- ~ SV1 + SV2 + Group
+```
+
+Ahora ya podríamos obtener resultados controlando estas variables al utilizar DESeq con el nuevo diseño.
+
+Además, podemos usar la función RUVg para estimar factores de variación no deseada, análogos a las variables sustitutas de SVA. 
+
+```{r message=FALSE}
+library("RUVSeq")
+
+set <- newSeqExpressionSet(counts(dds))
+idx  <- rowSums(counts(set) > 5) >= 2
+set  <- set[idx, ]
+set <- betweenLaneNormalization(set, which="upper")
+not.sig <- rownames(res)[which(res$pvalue > .1)]
+empirical <- rownames(set)[ rownames(set) %in% not.sig ]
+set <- RUVg(set, empirical, k=2)
+pData(set)
+```
+
+Y podemos representar los factores estimados por RUV:
+
+```{r fig.align='center', fig.width=7, fig.height=7}
+par(mfrow = c(2, 1), mar = c(3,5,3,1))
+for (i in 1:2) {
+  stripchart(pData(set)[, i] ~ dds$Group, vertical = TRUE, main = paste0("W", i))
+  abline(h = 0)
+ }
+```
+
+*Gráficos 7 y 8. Análisis del efecto de los lotes con RUVg.*
+
+### 3.3.6. Comparación entre distintas comparaciones
+
+En este punto del estudio es interesante conocer si algunos genes se han seleccionado como diferencialmente expresados en más de una comparación. Para ello, una de las formas más visuales de hacerlo es elaborar un diagrama de Venn, en el que se representa el número de genes que están diferencialmente expresados en una, dos o las tres comparaciones. 
+
+Al tener problemas para elaborar el diagrama con R, he decidido utilizar la herramienta web jvenn (Bardou, 2014), en la que se pueden representar diagramas de Venn de forma interactiva.
+
+Para ello, he seleccionado de los archivos csv exportados previamente (punto 3.3.4.) los identificadores de aquellos transcritos que tienen un p-valor ajustado inferior a 0.15.
+
+*Gráfico 9. Diagrama de Venn en el que se muestra cuántos genes diferencialmente expresados son compartidos entre varias comparaciones.*
+
+Como podemos observar, las comparaciones que más genes comparten son las dos en las que está presente ELI y las dos en las que tenemos el grupo control (NIT), con 26 en cada caso. Vemos que solamente uno de los transcritos está diferencialmente expresado con un p-valor ajustado inferior a 0.15 en las tres comparaciones realizadas.
+
+### 3.3.7. Análisis de significación biológica de los resultados obtenidos
+
+En este apartado del análisis, el objetivo es conocer si hay rutas moleculares, funciones, procesos biológicos, etc. que estén relacionados con los genes que están diferencialmente expresados.
+
+En este caso, en el paso de la anotación, solo en un 23% de los transcritos se han completado las columnas symbol y entrez, por lo que tratar de determinar cuáles son las rutas moleculares o procesos biológicos más relacionados con los genes diferencialmente expresados teniendo en cuenta sólo una pequeña parte de ellos no nos daría un resultado fiable. 
+
+En el apartado anterior, con la herramienta jvenn, hemos podido utilizar los identificadores ya que la herramienta busca que el código que le damos, sea del tipo que sea, esté en las tres listas que le proporcionamos, pero en este caso no sería suficiente.
+
+# 4. Resultados
+
+En este estudio hemos encontrado que el número de genes diferencialmente expresados es muy inferior en la comparación NIT-SFI con respecto a las comparaciones NIT-ELI y SFI-ELI. Este hecho, junto lo observado en los gráficos 3 y 4, en los que las muestras del grupo NIT y SFI se agrupaban mayoritariamente en un lado y las de ELI en otro, nos hace pensar que los resultados del tratamiento con pequeños infiltrados focales (SFI) son similares al grupo control sin infiltración (NIT), mientras que los infiltrados linfoides extensos (ELI) sí presentan diferencias con respecto a los otros dos grupos. 
+
+# 5. Discusión y conclusiones
+
+La principal limitación que he encontrado a la hora de realizar este estudio ha sido la anotación de genes, ya que la mayoría no han sido detectados. Este hecho no nos ha permitido hacer un análisis de significación biológica que fuera realmente representativo. 
+
+En este análisis hemos analizado solo 30 muestras de las 292 que tiene el estudio original, ya que el objetivo no era tener unas conclusiones sino aprender a hacer el análisis y que éste se pudiera ejecutar de forma fluida. Sin embargo, al no conocer el estudio original, no podemos saber si nuestras conclusiones son las mismas.
+
+# 6. Apéndice
+
+En el repositorio de GitHub https://github.com/monicahortal/PEC-2-An-lisis-de-Datos-micos.git se puede encontrar el archivo rmd que contiene el código de este análisis y los archivos generados en el desarrollo del trabajo.
+
+# 7. Referencias
+
+Michael I. Love, Charlotte Soneson, Simon Anders, Vladislav Kim and Wolfgang Huber. RNA-seq workflow: gene-level exploratory analysis and differential expression. CSAMA 2017 version.
+
+Philippe Bardou, Jérôme Mariette, Frédéric Escudié, Christophe Djemiel and Christophe Klopp. jvenn: an interactive Venn diagram viewer. BMC Bioinformatics 2014, 15:293 doi:10.1186/1471-2105-15-293.
